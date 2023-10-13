@@ -21,13 +21,13 @@ type GMSM2 struct {
 }
 
 type Args struct {
-	Index string `json:index`
+	Index string `json:"index"`
 	Data  string `json:"data"`
 	Sig   string `json:"sig"`
 }
 
 type Keys struct {
-	Index string `json:index`
+	Index string `json:"index"`
 	Pri   string `json:"pri"`
 	Pub   string `json:"pub"`
 }
