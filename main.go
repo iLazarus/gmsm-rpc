@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/big"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
+	"os"
 	"strconv"
 
 	"github.com/tjfoc/gmsm/sm2"
@@ -160,7 +160,7 @@ func main() {
 		log.Println("使用用户提供的公私钥")
 	} else {
 		log.Println("使用私钥文件解析密钥")
-		f, e := ioutil.ReadFile(k)
+		f, e := os.ReadFile(k)
 		if e != nil {
 			log.Fatal(k, "私钥读取失败", e)
 		}
