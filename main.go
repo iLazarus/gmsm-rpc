@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -21,15 +20,15 @@ type GMSM2 struct {
 }
 
 type Args struct {
-	Index string `json:"index"`
-	Data  string `json:"data"`
-	Sig   string `json:"sig"`
+	Data string `json:"data"`
+	Pri  string `json:"pri"`
+	Pub  string `json:"pub"`
+	Sig  string `json:"sig"`
 }
 
 type Keys struct {
-	Index string `json:"index"`
-	Pri   string `json:"pri"`
-	Pub   string `json:"pub"`
+	Pri string `json:"pri"`
+	Pub string `json:"pub"`
 }
 
 type Reply struct {
@@ -38,112 +37,57 @@ type Reply struct {
 }
 
 var (
-	priv map[string]sm2.PrivateKey
 	h    bool
 	p    int
 	host string
 )
 
-func sm2_load_key(index, pri, pub string) error {
+func sm2_load_key(pri, pub string) (sm2.PrivateKey, error) {
+	if len(pri) != 64 || len(pub) != 128 {
+		msg := "公私钥长度应该为128和64"
+		return sm2.PrivateKey{}, fmt.Errorf(msg)
+	}
 	bytes_pub, e := hex.DecodeString(pub[0:64])
 	if e != nil {
 		msg := fmt.Sprintf("公钥参数错误: %s", e)
-		return fmt.Errorf(msg)
+		return sm2.PrivateKey{}, fmt.Errorf(msg)
 	}
+	bytes_pri, e := hex.DecodeString(pri[0:64])
+	if e != nil {
+		msg := fmt.Sprintf("私钥参数错误: %s", e)
+		return sm2.PrivateKey{}, fmt.Errorf(msg)
+	}
+	// pub
 	pub_x := new(big.Int).SetBytes(bytes_pub)
 	c := []byte{}
 	c = append(c, 0x04)
 	c = append(c, pub_x.Bytes()...)
 	pubkey := sm2.Decompress(c)
-
-	pk, ok := priv[index]
-	if ok {
-		msg := "index已存在"
-		return fmt.Errorf(msg)
-	}
+	var pk sm2.PrivateKey
 	pk.PublicKey.Curve = pubkey.Curve
 	pk.PublicKey.X = pubkey.X
 	pk.PublicKey.Y = pubkey.Y
-	pribytes, e := hex.DecodeString(pri[0:64])
-	if e != nil {
-		msg := fmt.Sprintf("私钥参数长度错误: %s", e)
-		return fmt.Errorf(msg)
-	}
-	pk.D = new(big.Int).SetBytes(pribytes)
-
-	sign, err := pk.Sign(rand.Reader, []byte("testInit123456"), nil)
-	if err != nil {
-		msg := fmt.Sprintf("私钥参数错误: %s", e)
-		return fmt.Errorf(msg)
-	}
-	if pk.PublicKey.Verify([]byte("testInit123456"), sign) {
-		priv[index] = pk
-	} else {
-		msg := "密钥无法正常通过校验"
-		return fmt.Errorf(msg)
-	}
-	return nil
-}
-
-func (gmsm *GMSM2) Init(args Args, reply *Reply) error {
-	log.Println("Init", args.Data)
-	data, e := base64.StdEncoding.DecodeString(args.Data)
-	if e != nil {
-		msg := fmt.Sprintf("Init参数错误:%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
-	}
-	log.Println("Init", string(data))
-	var keys Keys
-	if e := json.Unmarshal(data, &keys); e != nil {
-		msg := fmt.Sprintf("Init参数错误:%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
-	}
-	if (keys.Pri == "" || keys.Pub == "") && keys.Index == "" {
-		msg := "Init参数错误 data中没有正确的字段"
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
-	}
-	if len(keys.Pri) >= 64 && len(keys.Pub) >= 128 {
-		log.Println("使用用户提供的公私钥")
-	}
-	if e := sm2_load_key(keys.Index, keys.Pri, keys.Pub); e != nil {
-		msg := fmt.Sprintf("Init初始化失败 %s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
-	}
-	reply.Msg = "Init初始化成功"
-	reply.Data = keys.Index
-	return nil
+	// pri
+	pk.D = new(big.Int).SetBytes(bytes_pri)
+	// check
+	return pk, nil
 }
 
 func (gmsm *GMSM2) Sign(args Args, reply *Reply) error {
-	log.Println("Sign", args.Data)
 	data, e := base64.StdEncoding.DecodeString(args.Data)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_sign :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
-	pk, ok := priv[args.Index]
-	if !ok {
-		msg := "index不存在，请先初始化"
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+	log.Println("Sign", string(data))
+	pk, e := sm2_load_key(args.Pri, args.Pub)
+	if e != nil {
+		return e
 	}
 	out, e := pk.Sign(rand.Reader, data, nil)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_sign :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
 	reply.Msg = "ok"
 	reply.Data = base64.StdEncoding.EncodeToString(out)
@@ -151,59 +95,41 @@ func (gmsm *GMSM2) Sign(args Args, reply *Reply) error {
 }
 
 func (gmsm *GMSM2) Verify(args Args, reply *Reply) error {
-	log.Println("Verify Data:", args.Data, "Sig:", args.Sig)
 	data, e := base64.StdEncoding.DecodeString(args.Data)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_verify :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
 	sigout, e := base64.StdEncoding.DecodeString(args.Sig)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_verify :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
-	pk, ok := priv[args.Index]
-	if !ok {
-		msg := "index不存在，请先初始化"
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+	log.Println("Verify: ", string(data), " Sig: ", args.Sig)
+	pk, e := sm2_load_key(args.Pri, args.Pub)
+	if e != nil {
+		return e
 	}
-	if pk.PublicKey.Verify(data, sigout) {
-		reply.Data = "true"
-	} else {
-		reply.Data = "false"
-	}
+	reply.Data = strconv.FormatBool(pk.PublicKey.Verify(data, sigout))
 	reply.Msg = "ok"
 	return nil
 }
 
 func (gmsm *GMSM2) Encrypt(args Args, reply *Reply) error {
-	log.Println("Encrypt", args.Data)
 	data, e := base64.StdEncoding.DecodeString(args.Data)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_encrypt :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
-	pk, ok := priv[args.Index]
-	if !ok {
-		msg := "index不存在，请先初始化"
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+	log.Println("Encrypt", string(data))
+	pk, e := sm2_load_key(args.Pri, args.Pub)
+	if e != nil {
+		return e
 	}
 	out, e := sm2.Encrypt(&pk.PublicKey, data, rand.Reader, 0)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_encrypt :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
 	reply.Msg = "ok"
 	reply.Data = base64.StdEncoding.EncodeToString(out)
@@ -211,27 +137,20 @@ func (gmsm *GMSM2) Encrypt(args Args, reply *Reply) error {
 }
 
 func (gmsm *GMSM2) Decrypt(args Args, reply *Reply) error {
-	log.Println("Decrypt", args.Data)
 	data, e := base64.StdEncoding.DecodeString(args.Data)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_decrypt :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
-	pk, ok := priv[args.Index]
-	if !ok {
-		msg := "index不存在，请先初始化"
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+	log.Println("Decrypt", args.Data)
+	pk, e := sm2_load_key(args.Pri, args.Pub)
+	if e != nil {
+		return e
 	}
 	out, e := sm2.Decrypt(&pk, data, 0)
 	if e != nil {
 		msg := fmt.Sprintf("sm2_decrypt :%s", e)
-		reply.Msg = msg
-		reply.Data = ""
-		return nil
+		return fmt.Errorf(msg)
 	}
 	reply.Msg = "ok"
 	reply.Data = base64.StdEncoding.EncodeToString(out)
@@ -268,7 +187,6 @@ func main() {
 	if h {
 		flag.Usage()
 	}
-	priv = make(map[string]sm2.PrivateKey)
 	rpc.Register(new(GMSM2))
 	port := host + ":" + strconv.Itoa(p)
 	listener, err := net.Listen("tcp", port)
